@@ -477,7 +477,9 @@ test( "attr(String, Object)", function() {
 test( "attr - extending the boolean attrHandle", function() {
 	expect( 1 );
 	var called = false,
-		_handle = jQuery.expr.attrHandle.checked || $.noop;
+		origAttrHandleHadChecked = "checked" in jQuery.expr.attrHandle,
+		origAttrHandleChecked = jQuery.expr.attrHandle.checked,
+		_handle = origAttrHandleChecked || $.noop;
 	jQuery.expr.attrHandle.checked = function() {
 		called = true;
 		_handle.apply( this, arguments );
@@ -486,6 +488,12 @@ test( "attr - extending the boolean attrHandle", function() {
 	called = false;
 	jQuery( "input" ).attr( "checked" );
 	ok( called, "The boolean attrHandle does not drop custom attrHandles" );
+
+	if ( origAttrHandleHadChecked ) {
+		jQuery.expr.attrHandle.checked = origAttrHandleChecked;
+	} else {
+		delete jQuery.expr.attrHandle.checked;
+	}
 });
 
 test( "attr(String, Object) - Loaded via XML document", function() {
@@ -1475,4 +1483,44 @@ test( "Insignificant white space returned for $(option).val() (#14858)", functio
 
 	val = jQuery( "<option>  test  </option>" ).val();
 	equal( val.length, 4, "insignificant white-space returned for value" );
+});
+
+test( "non-lowercase boolean attribute getters should not crash", function() {
+	expect( 3 );
+
+	var elem = jQuery( "<input checked required autofocus type='checkbox'>" );
+
+	jQuery.each({
+		checked: "Checked",
+		required: "requiRed",
+		autofocus: "AUTOFOCUS"
+	}, function( lowercased, original ) {
+		try {
+			strictEqual( elem.attr( original ), lowercased,
+				"The '" + this + "' attribute getter should return the lowercased name" );
+		} catch ( e ) {
+			ok( false, "The '" + this + "' attribute getter threw" );
+		}
+	});
+});
+
+test( "non-lowercase boolean attribute names don't cause infinite recursion", function() {
+	expect( 2 );
+
+	var inputs = jQuery( "<div><input checked type='checkbox'/><input type='checkbox'/></div>" )
+		.find("input");
+
+	try {
+
+		// Sizzle hands the original, non-lowercased name to the boolean attrHandle;
+		// looking the handle up under that name leaves it in place, so the getter
+		// calls back into it forever
+		strictEqual( jQuery.find.attr( inputs[ 0 ], "Checked" ), "checked",
+			"The boolean attrHandle returns the lowercased name" );
+
+		strictEqual( inputs.filter("[Checked]").length, 1,
+			"A non-lowercase boolean attribute selector matches the checked input" );
+	} catch ( e ) {
+		ok( false, "Getting a non-lowercase boolean attribute threw: " + e );
+	}
 });
