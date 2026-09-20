@@ -1,0 +1,113 @@
+name: build
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    name: build dist and pack the npm tarball
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # dist/cdn/* ships in the published tarball but no Grunt task creates it:
+      # the copies come from makeReleaseCopies() in build/release.js, which only
+      # runs inside the interactive jquery-release tool. This is that function,
+      # extracted verbatim. It goes under build/, which .npmignore excludes, so
+      # it stays out of the tarball.
+      - name: Stage the release CDN copy step
+        run: |
+          cat > build/cdn-copies.js <<'CDNEOF'
+          var fs = require( "fs" ),
+            path = require( "path" ),
+            version = require( "../package.json" ).version,
+            devFile = "dist/jquery.js",
+            minFile = "dist/jquery.min.js",
+            mapFile = "dist/jquery.min.map",
+            cdnFolder = "dist/cdn",
+            releaseFiles = {
+              "jquery-VER.js": devFile,
+              "jquery-VER.min.js": minFile,
+              "jquery-VER.min.map": mapFile,
+              "jquery.js": devFile,
+              "jquery.min.js": minFile,
+              "jquery.min.map": mapFile,
+              "jquery-latest.js": devFile,
+              "jquery-latest.min.js": minFile,
+              "jquery-latest.min.map": mapFile
+            };
+
+          if ( !fs.existsSync( cdnFolder ) ) {
+            fs.mkdirSync( cdnFolder );
+          }
+
+          Object.keys( releaseFiles ).forEach(function( key ) {
+            var text,
+              builtFile = releaseFiles[ key ],
+              unpathedFile = key.replace( /VER/g, version ),
+              releaseFile = path.join( cdnFolder, unpathedFile );
+
+            if ( /\.map$/.test( releaseFile ) ) {
+              text = fs.readFileSync( builtFile, "utf8" )
+                .replace( /"file":"([^"]+)","sources":\["([^"]+)"\]/,
+                  "\"file\":\"" + unpathedFile.replace( /\.min\.map/, ".min.js" ) +
+                  "\",\"sources\":[\"" + unpathedFile.replace( /\.min\.map/, ".js" ) + "\"]" );
+              fs.writeFileSync( releaseFile, text );
+            } else if ( /\.min\.js$/.test( releaseFile ) ) {
+              text = fs.readFileSync( builtFile, "utf8" )
+                .replace( /\/\/# sourceMappingURL=\S+/, "" );
+              fs.writeFileSync( releaseFile, text );
+            } else {
+              fs.writeFileSync( releaseFile, fs.readFileSync( builtFile ) );
+            }
+            console.log( "Created: " + releaseFile );
+          });
+          CDNEOF
+
+      # jQuery 1.11.1 targets node 0.10 (see .travis.yml) and its published
+      # dist/jquery.min.js was produced by the uglify-js that resolved on the
+      # release date, so the build runs in the release-era toolchain: the
+      # node 0.10.48 image plus the registry time machine pinned at the 1.11.1
+      # publish timestamp. SOURCE_DATE_EPOCH is the instant stamped into the
+      # published headers (dist/jquery.js "Date: 2014-05-01T17:42Z").
+      - name: Build dist and pack
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE":/src -w /src \
+            -e SOURCE_DATE_EPOCH=1398966120 \
+            node:0.10.48 \
+            bash -euxc '
+              npm config set registry "https://:2014-05-01T18%3A05%3A32.863Z@time-machines-npm.sealsecurity.io/"
+              npm install
+              ./node_modules/.bin/grunt
+              node build/cdn-copies.js
+              rm -rf .github
+              npm pack
+            '
+
+      # The project's own `npm test` (Travis) is Grunt's lint-and-build default;
+      # the actual unit suite is QUnit in a browser, which upstream drove through
+      # TestSwarm. test/run-qunit.js loads the same test/index.html headlessly,
+      # served by PHP so the .php-backed ajax fixtures answer. It runs against
+      # the dist/ the previous step just built.
+      - name: Run the jQuery unit suite
+        run: |
+          php -S 127.0.0.1:8080 -t "$GITHUB_WORKSPACE" >"$RUNNER_TEMP/php.log" 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8080/test/index.html >/dev/null && break
+            sleep 1
+          done
+          npm install --prefix "$RUNNER_TEMP" puppeteer-core
+          NODE_PATH="$RUNNER_TEMP/node_modules" \
+            node test/run-qunit.js http://127.0.0.1:8080/test/index.html
+        env:
+          CHROME_BIN: /usr/bin/google-chrome
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarball
+          path: jquery-1.11.1.tgz
+          if-no-files-found: error

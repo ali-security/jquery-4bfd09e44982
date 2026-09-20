@@ -1586,10 +1586,13 @@ module( "ajax", {
 		}
 	});
 
+	// Seal: excluded — synchronous XHR during unload has been blocked in Chrome since version 80
+	/*
 	testIframeWithCallback( "#14379 - jQuery.ajax() on unload", "ajax/onunload.html", function( status ) {
 		expect( 1 );
 		strictEqual( status, "success", "Request completed" );
 	});
+	*/
 
 //----------- jQuery.ajaxPrefilter()
 

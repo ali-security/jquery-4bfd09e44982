@@ -9,6 +9,15 @@ module.exports = function( grunt ) {
 		return data;
 	}
 
+	// Honor SOURCE_DATE_EPOCH so a rebuild stamps the banner with the original
+	// release year instead of the year the rebuild happens to run in.
+	function buildYear() {
+		var epoch = process.env.SOURCE_DATE_EPOCH;
+		return epoch ?
+			new Date( parseInt( epoch, 10 ) * 1000 ).getUTCFullYear() :
+			grunt.template.today( "yyyy" );
+	}
+
 	var gzip = require( "gzip-js" ),
 		srcHintOptions = readOptionalJSON( "src/.jshintrc" );
 
@@ -122,7 +131,7 @@ module.exports = function( grunt ) {
 						ascii_only: true
 					},
 					banner: "/*! jQuery v<%= pkg.version %> | " +
-						"(c) 2005, <%= grunt.template.today('yyyy') %> jQuery Foundation, Inc. | " +
+						"(c) 2005, " + buildYear() + " jQuery Foundation, Inc. | " +
 						"jquery.org/license */",
 					compress: {
 						hoist_funs: false,
@@ -143,9 +152,31 @@ module.exports = function( grunt ) {
 	grunt.registerTask( "bower", "bowercopy" );
 	grunt.registerTask( "lint", [ "jshint", "jscs" ] );
 
+	// build/tasks/build.js stamps the concatenated file with the wall clock of
+	// the machine doing the build. Rewrite it from SOURCE_DATE_EPOCH, before
+	// uglify reads dist/jquery.js, so a rebuild reproduces the released header.
+	grunt.registerTask( "sourcedate", function() {
+		var date, text,
+			epoch = process.env.SOURCE_DATE_EPOCH,
+			file = "dist/jquery.js";
+
+		if ( !epoch ) {
+			grunt.log.writeln( "SOURCE_DATE_EPOCH not set; keeping the build date." );
+			return;
+		}
+
+		date = new Date( parseInt( epoch, 10 ) * 1000 )
+			.toISOString().replace( /:\d+\.\d+Z$/, "Z" );
+		text = grunt.file.read( file )
+			.replace( /^ \* Date: .*$/m, " * Date: " + date );
+		grunt.file.write( file, text );
+		grunt.log.writeln( "Date in " + file + " set to " + date + "." );
+	});
+
 	// Short list as a high frequency watch task
 	grunt.registerTask( "dev", [ "build:*:*", "lint" ] );
 
 	// Default grunt
-	grunt.registerTask( "default", [ "jsonlint", "dev", "uglify", "dist:*", "compare_size" ] );
+	grunt.registerTask( "default",
+		[ "jsonlint", "dev", "sourcedate", "uglify", "dist:*", "compare_size" ] );
 };
